@@ -27,3 +27,5 @@ coverage/
 .idea/
 
 /packages/themis/a1-state.json
+/packages/themis/a2-state.json
+/packages/themis/.local/

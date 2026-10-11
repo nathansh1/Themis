@@ -13,6 +13,7 @@
   "dependencies": {
     "@themis/shared": "workspace:*",
     "@zerodev/ecdsa-validator": "^5.4.9",
+    "@zerodev/permissions": "^5.6.3",
     "@zerodev/sdk": "^5.5.10",
     "viem": "^2.57.4"
   }
