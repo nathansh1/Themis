@@ -11,6 +11,9 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "@themis/shared": "workspace:*"
+    "@themis/shared": "workspace:*",
+    "@zerodev/ecdsa-validator": "^5.4.9",
+    "@zerodev/sdk": "^5.5.10",
+    "viem": "^2.57.4"
   }
 }
