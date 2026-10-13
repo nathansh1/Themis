@@ -17,9 +17,9 @@ export type HealthSnapshot = {
 };
 
 export async function readHealth(): Promise<HealthSnapshot> {
-  const account = process.env.KERNEL_ADDRESS;
+  const account = process.env.KERNEL_ACCOUNT_ADDRESS || process.env.KERNEL_ADDRESS;
   const rpc = process.env.SEPOLIA_RPC_URL;
-  if (!account || !isAddress(account)) throw new Error("KERNEL_ADDRESS is missing or invalid in .env");
+  if (!account || !isAddress(account)) throw new Error("KERNEL_ACCOUNT_ADDRESS (or KERNEL_ADDRESS) is missing or invalid in .env");
   if (!rpc) throw new Error("SEPOLIA_RPC_URL is missing in .env");
 
   const client = createPublicClient({ chain: sepolia, transport: http(rpc, { retryCount: 1, timeout: 10_000 }) });

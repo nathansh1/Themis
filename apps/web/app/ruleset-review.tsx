@@ -1,7 +1,6 @@
 "use client";
 
-import type { Ruleset } from "@themis/shared";
-import type { PendingRuleset } from "@/lib/fake-themis";
+import type { RulesetResult } from "@themis/shared";
 import { usePoll } from "@/lib/use-poll";
 
 const when = (unixSeconds: number) =>
@@ -17,9 +16,9 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 export default function RulesetReview() {
-  const { data, error } = usePoll<PendingRuleset[]>("/api/ruleset", 3000);
-  const latest = data?.at(-1);
-  const r = latest?.ruleset as Ruleset | undefined;
+  const { data, error } = usePoll<RulesetResult[]>("/api/ruleset", 3000);
+  const latest = data?.find((g) => g.status === "active") ?? data?.at(-1);
+  const r = latest?.rules;
 
   if (error) return <p className="text-sm text-seal">{error}</p>;
   if (!latest || !r) {
@@ -34,15 +33,17 @@ export default function RulesetReview() {
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <span className="stamp inline-block border-2 border-warn px-2 py-1 font-display text-xs font-bold uppercase tracking-[0.2em] text-warn">
-          Pending
+        <span
+          className={`stamp inline-block border-2 px-2 py-1 font-display text-xs font-bold uppercase tracking-[0.2em] ${
+            latest.status === "active" ? "border-ok text-ok" : latest.status === "expired" ? "border-seal text-seal" : "border-warn text-warn"
+          }`}
+        >
+          {latest.status === "active" ? "Active" : latest.status === "expired" ? "Expired" : "Pending"}
         </span>
         <span className="font-display text-[11px] uppercase tracking-[0.18em] text-foreground/60">
-          Awaiting Ledger approval
+          {latest.status === "active" ? "Approved by the owner" : latest.status === "expired" ? "Window over" : "Awaiting Ledger approval"}
         </span>
-        {data && data.length > 1 && (
-          <span className="ml-auto text-xs text-foreground/40">Proposal {latest.id} of {data.length}</span>
-        )}
+        {data && data.length > 1 && <span className="ml-auto text-xs text-foreground/40">{data.length} proposals</span>}
       </div>
       <dl>
         <Row label="Acts when">Health factor falls below <strong>{r.trigger.healthFactorBelow}</strong></Row>

@@ -1,14 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import type { LogEntry } from "@/lib/fake-themis";
+import type { ActivityEntry } from "@themis/shared";
 import { usePoll } from "@/lib/use-poll";
 
 const TEST_INTENTS = [
   {
-    label: "Send valid repay (50 USDC)",
+    label: "Send valid repay (1 USDC)",
     danger: false,
-    body: { action: "repay", asset: "USDC", amount: "50", reason: "Health factor is low" },
+    body: { action: "repay", asset: "USDC", amount: "1", reason: "Health factor is low" },
   },
   {
     label: "Send attack: transfer 10,000 USDC",
@@ -23,7 +23,7 @@ function describe(intent: unknown) {
 }
 
 export default function ActivityLog() {
-  const { data, error, refresh } = usePoll<LogEntry[]>("/api/log", 2000);
+  const { data, error, refresh } = usePoll<ActivityEntry[]>("/api/log", 2000);
   const [sending, setSending] = useState(false);
 
   async function send(body: unknown) {
@@ -59,38 +59,30 @@ export default function ActivityLog() {
         <p className="border-t hairline pt-4 text-sm text-foreground/50">No decisions yet. The docket is empty.</p>
       )}
       <ul className="flex flex-col">
-        {data
-          ?.slice()
-          .reverse()
-          .map((e) => {
-            const { result } = e;
-            const approved = result.status === "executed";
-            const pending = result.status === "pending";
-            return (
-              <li key={e.id} className="grid grid-cols-[auto_1fr_auto] items-start gap-4 border-t hairline py-4">
-                <span
-                  className={`stamp mt-0.5 inline-block w-28 border-2 px-2 py-1 text-center font-display text-xs font-bold uppercase tracking-[0.2em] ${
-                    approved ? "border-ok text-ok" : pending ? "border-foreground/40 text-foreground/60" : "border-seal text-seal"
-                  }`}
-                >
-                  {approved ? "Approved" : pending ? "Pending" : "Rejected"}
-                </span>
-                <div className="min-w-0">
-                  <p className="font-mono text-sm">{describe(e.intent)}</p>
-                  <p className="mt-1 break-all font-mono text-xs text-foreground/55">
-                    {result.status === "executed"
-                      ? result.txHash
-                      : result.status === "pending"
-                        ? result.userOpHash
-                        : result.failed.join("; ")}
-                  </p>
-                </div>
-                <time className="font-mono text-xs tabular-nums text-foreground/40">
-                  {new Date(e.time).toLocaleTimeString()}
-                </time>
-              </li>
-            );
-          })}
+        {data?.map((e) => {
+          const approved = e.status === "executed";
+          const waiting = e.status === "pending" || e.status === "checking";
+          return (
+            <li key={e.id} className="grid grid-cols-[auto_1fr_auto] items-start gap-4 border-t hairline py-4">
+              <span
+                className={`stamp mt-0.5 inline-block w-28 border-2 px-2 py-1 text-center font-display text-xs font-bold uppercase tracking-[0.2em] ${
+                  approved ? "border-ok text-ok" : waiting ? "border-foreground/40 text-foreground/60" : "border-seal text-seal"
+                }`}
+              >
+                {approved ? "Approved" : e.status === "checking" ? "Checking" : e.status === "pending" ? "Pending" : "Rejected"}
+              </span>
+              <div className="min-w-0">
+                <p className="font-mono text-sm">{describe(e.intent)}</p>
+                <p className="mt-1 break-all font-mono text-xs text-foreground/55">
+                  {approved ? e.txHash : waiting ? e.userOpHash : e.failed.join("; ")}
+                </p>
+              </div>
+              <time className="font-mono text-xs tabular-nums text-foreground/40">
+                {new Date(e.updatedAt ?? e.createdAt).toLocaleTimeString()}
+              </time>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
