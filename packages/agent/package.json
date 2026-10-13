@@ -1,15 +1,14 @@
 {
   "name": "agent",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Watches the Aave health factor and wakes Hermes (on Venice) when it drops",
+  "private": true,
+  "type": "module",
   "scripts": {
+    "watch": "node --env-file-if-exists=../../.env src/watch.mjs",
+    "ask": "node --env-file-if-exists=../../.env src/ask.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "module",
   "dependencies": {
     "@themis/shared": "workspace:*"
   }
