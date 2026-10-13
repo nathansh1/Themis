@@ -22,7 +22,7 @@ function fixture(t, options = {}) {
   const backend = {
     sends: 0, prepares: 0, found: true,
     now: async () => 2000,
-    prepareAuthorization: async () => ({ operation: { sender: account, nonce: 5n, callData: '0x' }, hash, requests: [{ id: digestA, kind: 'typedData', typedData: {} }, { id: digestB, kind: 'message', raw: hash }], amount: 3000000n, sessionKey: account }),
+    prepareAuthorization: async () => ({ operation: { sender: account, nonce: 5n, callData: '0x' }, hash, requests: [{ id: digestA, kind: 'typedData', typedData: {} }, { id: digestB, kind: 'message', raw: hash }], amount: 3000000n, owner: account, sessionKey: account }),
     finalizeAuthorization: async () => ({ operation: { sender: account }, hash, serialized: 'serialized-permission', permissionId: `0x${'12'.repeat(4)}`, ratePolicy: account }),
     snapshot: async () => ({ now: 200, allowance: 3000000n, remaining: 3, balance: 100000000n, debt: 500000000n }),
     prepare: async () => { backend.prepares++; return { hash }; },
@@ -181,7 +181,7 @@ test('owner authorization: prepare, then signatures activate the ruleset only af
   const prepared = await service.prepareOwner(grant.id);
   assert.equal(prepared.code, 200);
   assert.deepEqual(prepared.body.requests.map(request => request.id), [digestA, digestB]);
-  assert.equal(prepared.body.allowanceUnits, '3000000');
+  assert.equal(prepared.body.allowanceUnits, '3000000'); assert.equal(prepared.body.owner, account);
   assert.equal(store.grant(grant.id).status, 'awaiting_owner');
   assert.equal((await service.authorize(grant.id, { [digestA]: sig })).body.failed[0], 'missing_signature');
   assert.equal((await service.authorize(grant.id, { [digestA]: sig, nope: sig })).body.failed[0], 'invalid_signatures');

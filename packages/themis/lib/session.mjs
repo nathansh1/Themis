@@ -85,7 +85,7 @@ export function createChainBackend(config) {
       const { signature: _stub, calls: _calls, account: _account, ...operation } = prepared;
       await ownerAccount.signUserOperation(operation); // asks the owner to sign the operation hash
       const hash = getUserOperationHash({ userOperation: operation, chainId: chain.id, entryPointAddress: entryPoint.address, entryPointVersion: '0.7' });
-      return { operation, hash, requests: owner.requests(), amount, sessionKey: signerAddress, permissionId: permission.getIdentifier(), ratePolicy: `0x${policies[2].getPolicyInfoInBytes().slice(-40)}` };
+      return { operation, hash, requests: owner.requests(), amount, owner: config.ownerAddress, sessionKey: signerAddress, permissionId: permission.getIdentifier(), ratePolicy: `0x${policies[2].getPolicyInfoInBytes().slice(-40)}` };
     },
     // Phase 2: rebuild the identical objects, apply the owner's signatures, and return the sendable operation.
     async finalizeAuthorization(grant, prepared, signatures) {

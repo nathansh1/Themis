@@ -24,7 +24,14 @@ const grant = { id: 'check', rules: { account: kernel, chainId: 11155111, window
 const prepared = await backend.prepareAuthorization(grant);
 console.log('Owner must sign:', prepared.requests.map(request => `${request.kind} ${request.id.slice(0, 12)}…`).join(', '));
 if (prepared.requests.length !== 2) throw new Error('Expected one typed-data and one message request.');
-const signatures = Object.fromEntries(await Promise.all(prepared.requests.map(async request => [request.id, serializeSignature(await sign({ hash: request.id, privateKey: normalizeKey(process.env.DEV_OWNER_PRIVATE_KEY) }))])));
+// ENABLE_AS=personal signs the permission the way the web app now does on a Ledger: personal-sign over the
+// 32-byte EIP-712 digest (no typed-data parsing on the device). Default signs the digest directly.
+const enableAsPersonal = process.env.ENABLE_AS === 'personal';
+const signatures = Object.fromEntries(await Promise.all(prepared.requests.map(async request => [request.id,
+  request.kind === 'typedData' && enableAsPersonal
+    ? await dev.signMessage({ message: { raw: request.id } })
+    : serializeSignature(await sign({ hash: request.id, privateKey: normalizeKey(process.env.DEV_OWNER_PRIVATE_KEY) }))])));
+console.log('Permission signed as:', enableAsPersonal ? 'personal-sign over the EIP-712 digest' : 'raw EIP-712 digest');
 const finalized = await backend.finalizeAuthorization(grant, prepared, signatures);
 console.log('Finalized: operation signed, permission serialized, id', finalized.permissionId);
 

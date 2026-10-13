@@ -88,7 +88,7 @@ export class Service {
       let prepared;
       try { prepared = await this.backend.prepareAuthorization(grant); } catch { return refuse(503, 'authorization_unavailable'); }
       this.store.putGrant({ ...grant, authorization: { hash: prepared.hash, operation: encodeOperation(prepared.operation), requestIds: prepared.requests.map(request => request.id), preparedAt: new Date().toISOString() } });
-      return { code: 200, body: { id: grant.id, status: 'awaiting_signatures', hash: prepared.hash, allowanceUnits: prepared.amount.toString(), sessionKey: prepared.sessionKey, account: grant.rules.account, requests: prepared.requests } };
+      return { code: 200, body: { id: grant.id, status: 'awaiting_signatures', hash: prepared.hash, owner: prepared.owner, allowanceUnits: prepared.amount.toString(), sessionKey: prepared.sessionKey, account: grant.rules.account, requests: prepared.requests } };
     }
     if (grant.authorization.requestIds.some(digest => !signatures[digest])) return refuse(400, 'missing_signature');
     let finalized;

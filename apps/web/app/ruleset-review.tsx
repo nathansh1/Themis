@@ -2,6 +2,7 @@
 
 import type { RulesetResult } from "@themis/shared";
 import { usePoll } from "@/lib/use-poll";
+import ApproveLedger from "./approve-ledger";
 
 const when = (unixSeconds: number) =>
   new Date(unixSeconds * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
@@ -17,8 +18,9 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 export default function RulesetReview() {
   const { data, error } = usePoll<RulesetResult[]>("/api/ruleset", 3000);
-  // Newest first. A live proposal awaiting the Ledger is what the owner must review; otherwise show what is in force.
-  const latest = data?.find((g) => g.status === "awaiting_owner") ?? data?.find((g) => g.status === "active") ?? data?.[0];
+  // Newest first: show the newest live ruleset, whether it awaits the Ledger or is already in force. Older
+  // unapproved proposals stay hidden behind a newer approval instead of displacing it.
+  const latest = data?.find((g) => g.status !== "expired") ?? data?.[0];
   const r = latest?.rules;
 
   if (error) return <p className="text-sm text-seal">{error}</p>;
@@ -60,6 +62,7 @@ export default function RulesetReview() {
           <code className="break-all font-mono text-xs">{r.account}</code>
         </Row>
       </dl>
+      {latest.status === "awaiting_owner" && <ApproveLedger id={latest.id} rules={r} />}
     </div>
   );
 }

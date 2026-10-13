@@ -11,24 +11,26 @@ export function themisBase(): string | null {
   return url.replace(/\/$/, "");
 }
 
-function agentToken(): string | undefined {
-  if (process.env.THEMIS_AGENT_TOKEN) return process.env.THEMIS_AGENT_TOKEN;
+function token(role: "agent" | "owner"): string | undefined {
+  const fromEnv = role === "owner" ? process.env.THEMIS_OWNER_TOKEN : process.env.THEMIS_AGENT_TOKEN;
+  if (fromEnv) return fromEnv;
   const file = resolve(process.cwd(), "../../packages/themis/.local/api-credentials.json");
   try {
-    return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")).agentToken as string) : undefined;
+    return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8"))[`${role}Token`] as string) : undefined;
   } catch {
     return undefined;
   }
 }
 
-export async function themisFetch(base: string, path: string, init: { method?: string; body?: unknown; idempotencyKey?: string } = {}) {
-  const token = agentToken();
+export async function themisFetch(base: string, path: string, init: { method?: string; body?: unknown; idempotencyKey?: string; as?: "agent" | "owner" } = {}) {
+  // The owner token only ever leaves this server process toward Themis; it is never sent to the browser.
+  const bearer = token(init.as ?? "agent");
   let res: Response;
   try {
     res = await fetch(`${base}${path}`, {
       method: init.method ?? "GET",
       headers: {
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
         ...(init.body === undefined ? {} : { "content-type": "application/json" }),
         ...(init.idempotencyKey ? { "idempotency-key": init.idempotencyKey } : {}),
       },
