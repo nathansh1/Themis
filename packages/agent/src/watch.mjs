@@ -1,7 +1,7 @@
 // Polls the health factor and wakes Hermes only when it drops below the trigger.
 import { loadConfig } from "./config.mjs";
 import { readHealth } from "./health.mjs";
-import { runHermes } from "./hermes.mjs";
+import { wake } from "./wake.mjs";
 
 const cfg = loadConfig();
 const chain = cfg.chain();
@@ -27,14 +27,14 @@ async function tick() {
 
   wakeInFlight = true;
   lastWake = Date.now();
-  log("below trigger, waking Hermes");
+  log(`below trigger, waking Hermes (${cfg.hermes.mode})`);
   try {
-    const { decisions, summary } = await runHermes({
+    const { summary } = await wake({
       situation: { ...health, trigger: cfg.trigger },
       config: cfg.hermes,
       log,
     });
-    log(`Hermes done: ${decisions.length} intent(s). ${summary}`);
+    log(`Hermes done. ${summary}`);
   } catch (e) {
     log(`Hermes failed: ${e instanceof Error ? e.message : e}`);
   } finally {
@@ -42,6 +42,6 @@ async function tick() {
   }
 }
 
-log(`watching ${chain.account} every ${cfg.pollMs}ms, model ${cfg.hermes.model}, intents to ${cfg.hermes.themisUrl}`);
+log(`watching ${chain.account} every ${cfg.pollMs}ms, Themis at ${cfg.hermes.themisUrl}, mode ${cfg.hermes.mode}`);
 await tick();
 setInterval(tick, cfg.pollMs);

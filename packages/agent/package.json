@@ -1,10 +1,11 @@
 {
   "name": "agent",
   "version": "1.0.0",
-  "description": "Watches the Aave health factor and wakes Hermes (on Venice) when it drops",
+  "description": "Hermes on Venice: chat to set the rule, and a watcher that wakes it when the health factor drops",
   "private": true,
   "type": "module",
   "scripts": {
+    "chat": "node --env-file-if-exists=../../.env src/chat.mjs",
     "watch": "node --env-file-if-exists=../../.env src/watch.mjs",
     "ask": "node --env-file-if-exists=../../.env src/ask.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"

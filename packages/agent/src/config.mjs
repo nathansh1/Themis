@@ -10,12 +10,20 @@ function need(name) {
 }
 
 export function loadConfig() {
+  const mode = process.env.AGENT_MODE || "hermes";
+  if (mode !== "hermes" && mode !== "direct") {
+    console.error(`AGENT_MODE must be "hermes" or "direct", got "${mode}".`);
+    process.exit(1);
+  }
   return {
     hermes: {
+      mode,
       apiKey: need("VENICE_API_KEY"),
       baseUrl: (process.env.VENICE_BASE_URL || "https://api.venice.ai/api/v1").replace(/\/$/, ""),
-      model: process.env.VENICE_MODEL || "hermes-3-llama-3.1-405b",
-      themisUrl: process.env.THEMIS_INTENT_URL || "http://localhost:3000/api/intent",
+      model: process.env.VENICE_MODEL || "llama-3.3-70b",
+      // Base URL of Themis; the agent calls <base>/ruleset and <base>/intent. Defaults to the web app's fake.
+      themisUrl: (process.env.THEMIS_URL || "http://localhost:3000/api").replace(/\/$/, ""),
+      account: process.env.KERNEL_ADDRESS,
     },
     trigger: Number(process.env.HEALTH_THRESHOLD || 1.15),
     pollMs: Number(process.env.POLL_MS || 5000),
