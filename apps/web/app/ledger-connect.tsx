@@ -60,7 +60,7 @@ export default function LedgerConnect() {
 
   if (!supported) {
     return (
-      <p className="text-sm text-red-600">
+      <p className="text-sm text-seal">
         WebHID is not available in this browser. Use Chrome or Edge.
       </p>
     );
@@ -70,51 +70,50 @@ export default function LedgerConnect() {
     signed && address && signed.recovered.toLowerCase() === address.toLowerCase();
 
   return (
-    <section className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          onClick={connect}
-          disabled={busy}
-          className="rounded-full bg-foreground px-5 py-2 text-sm font-medium text-background disabled:opacity-50"
-        >
+    <div className="flex flex-col gap-5">
+      <div className="flex items-center gap-2">
+        <span className={`h-2 w-2 rounded-full ${address ? "bg-ok" : "bg-foreground/30"}`} />
+        <span className="font-display text-[11px] uppercase tracking-[0.18em] text-foreground/60">{status}</span>
+      </div>
+
+      <div className="flex flex-wrap gap-3">
+        <button onClick={connect} disabled={busy} className="btn btn-solid">
           {address ? "Reconnect Ledger" : "Connect Ledger"}
         </button>
         {address && (
-          <button
-            onClick={signTest}
-            disabled={busy}
-            className="rounded-full border border-foreground/20 px-5 py-2 text-sm font-medium disabled:opacity-50"
-          >
+          <button onClick={signTest} disabled={busy} className="btn btn-line">
             Sign test message
           </button>
         )}
-        <span className="text-sm text-foreground/60">{status}</span>
       </div>
 
       {address && (
-        <p className="text-sm">
-          Ledger address: <code className="font-mono">{address}</code>
-        </p>
+        <div>
+          <p className="font-display text-[10px] uppercase tracking-[0.18em] text-foreground/50">Ledger address</p>
+          <p className="mt-1 break-all font-mono text-sm">{address}</p>
+        </div>
       )}
 
       {signed && (
-        <div className="flex flex-col gap-1 text-sm">
+        <div className="flex flex-col gap-2 border-t hairline pt-4 text-sm">
           <p>
-            Signed: <code className="font-mono">{signed.message}</code>
+            <span className="font-display text-[10px] uppercase tracking-[0.18em] text-foreground/50">Signed </span>
+            <code className="font-mono">{signed.message}</code>
           </p>
           <p className="break-all">
-            Signature: <code className="font-mono">{signed.signature}</code>
+            <span className="font-display text-[10px] uppercase tracking-[0.18em] text-foreground/50">Signature </span>
+            <code className="font-mono text-xs">{signed.signature}</code>
           </p>
           <p>
-            Recovered signer matches Ledger address:{" "}
-            <strong className={matches ? "text-green-600" : "text-red-600"}>
-              {matches ? "yes" : "NO"}
-            </strong>
+            <span className="font-display text-[10px] uppercase tracking-[0.18em] text-foreground/50">
+              Recovered signer matches Ledger{" "}
+            </span>
+            <strong className={matches ? "text-ok" : "text-seal"}>{matches ? "Yes" : "No"}</strong>
           </p>
         </div>
       )}
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
-    </section>
+      {error && <p className="text-sm text-seal">{error}</p>}
+    </div>
   );
 }
