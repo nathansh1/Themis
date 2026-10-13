@@ -43,3 +43,19 @@ export function record(intent: unknown, result: IntentResult): LogEntry {
   log.push(entry);
   return entry;
 }
+
+export type PendingRuleset = { id: number; time: number; status: "pending"; ruleset: unknown };
+
+const rulesetStore = globalThis as typeof globalThis & { __fakeThemisRulesets?: PendingRuleset[] };
+const rulesets = (rulesetStore.__fakeThemisRulesets ??= []);
+
+export function getRulesets(): PendingRuleset[] {
+  return rulesets;
+}
+
+// Stand-in: the real Themis holds the proposal until the Ledger approves it.
+export function propose(ruleset: unknown): PendingRuleset {
+  const entry: PendingRuleset = { id: rulesets.length + 1, time: Date.now(), status: "pending", ruleset };
+  rulesets.push(entry);
+  return entry;
+}

@@ -1,8 +1,10 @@
 import Image from "next/image";
 import ActivityLog from "./activity-log";
+import Chat from "./chat";
 import HealthFactor from "./health-factor";
 import LedgerConnect from "./ledger-connect";
 import Plate from "./plate";
+import RulesetReview from "./ruleset-review";
 
 export default function Home() {
   return (
@@ -32,7 +34,16 @@ export default function Home() {
         </Plate>
       </div>
 
-      <Plate numeral="III" title="Docket">
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Plate numeral="III" title="Counsel">
+          <Chat />
+        </Plate>
+        <Plate numeral="IV" title="Ruleset">
+          <RulesetReview />
+        </Plate>
+      </div>
+
+      <Plate numeral="V" title="Docket">
         <ActivityLog />
       </Plate>
     </main>
