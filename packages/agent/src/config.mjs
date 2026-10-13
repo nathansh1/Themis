@@ -1,3 +1,4 @@
+import { kernelAccount } from "./account.mjs";
 import { DEFAULT_AAVE_POOL } from "./health.mjs";
 
 function need(name) {
@@ -21,16 +22,17 @@ export function loadConfig() {
       apiKey: need("VENICE_API_KEY"),
       baseUrl: (process.env.VENICE_BASE_URL || "https://api.venice.ai/api/v1").replace(/\/$/, ""),
       model: process.env.VENICE_MODEL || "llama-3.3-70b",
-      // Base URL of Themis; the agent calls <base>/ruleset and <base>/intent. Defaults to the web app's fake.
+      // Base URL of Themis; the agent calls <base>/ruleset and <base>/intent. Unset = the web app's built-in
+      // stand-in; set it to http://127.0.0.1:3001 for the real server (the web app reads the same variable).
       themisUrl: (process.env.THEMIS_URL || "http://localhost:3000/api").replace(/\/$/, ""),
-      account: process.env.KERNEL_ADDRESS,
+      account: kernelAccount(),
     },
     trigger: Number(process.env.HEALTH_THRESHOLD || 1.15),
     pollMs: Number(process.env.POLL_MS || 5000),
     cooldownMs: Number(process.env.COOLDOWN_MS || 60_000),
     chain: () => ({
       rpcUrl: need("SEPOLIA_RPC_URL"),
-      account: need("KERNEL_ADDRESS"),
+      account: kernelAccount() ?? need("KERNEL_ACCOUNT_ADDRESS"),
       pool: process.env.AAVE_POOL_ADDRESS || DEFAULT_AAVE_POOL,
     }),
   };

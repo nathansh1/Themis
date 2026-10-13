@@ -1,10 +1,18 @@
 // The two tools Hermes gets. Shared by the MCP server (real Hermes) and the direct-Venice fallback.
 // Themis builds all calldata itself; nothing here lets the agent supply any.
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 
 const CHAIN_ID = 11155111;
 const DEFAULT_TRIGGER = 1.15;
 const DEFAULT_ACTIONS = 3;
 const DEFAULT_WINDOW_SECONDS = 8 * 3600;
+// Themis's own ceilings (packages/themis/lib/validation.mjs): mirrored here so Hermes gets a clear error up front.
+const MAX_PER_ACTION = 500;
+const MAX_ACTIONS = 3;
+const MAX_TRIGGER = 10;
+const POLL_EVERY_MS = 3000;
+const POLL_FOR_MS = 75_000;
 
 export const TOOL_DEFS = [
   {
@@ -14,13 +22,20 @@ export const TOOL_DEFS = [
       "Nothing is active until the user approves it on their Ledger. " +
       'Use this when the user says things like "protect my position overnight, max $1,500". ' +
       "The only supported action is repaying USDC debt on Aave V3. " +
+      `Themis allows at most ${MAX_ACTIONS} repay actions of at most ${MAX_PER_ACTION} USDC each, so the largest total cap is ${MAX_ACTIONS * MAX_PER_ACTION} USDC. ` +
       "The per-action cap is totalCapUsdc divided by maxActions. " +
       "After calling, tell the user plainly what was proposed (cap, number of repays, trigger, window) and that they must approve it on the Ledger.",
     inputSchema: {
       type: "object",
       properties: {
-        totalCapUsdc: { type: "number", description: "Most USDC the agent may repay in total, e.g. 1500." },
-        maxActions: { type: "integer", description: `Most repay actions allowed (default ${DEFAULT_ACTIONS}).` },
+        totalCapUsdc: {
+          type: "number",
+          description: `Most USDC the agent may repay in total, e.g. 1500. At most ${MAX_ACTIONS * MAX_PER_ACTION}.`,
+        },
+        maxActions: {
+          type: "integer",
+          description: `Most repay actions allowed, 1 to ${MAX_ACTIONS} (default ${DEFAULT_ACTIONS}).`,
+        },
         healthFactorBelow: {
           type: "number",
           description: `Only act when the health factor is below this (default ${DEFAULT_TRIGGER}).`,
@@ -42,6 +57,7 @@ export const TOOL_DEFS = [
     description:
       "Ask Themis to perform an action on the user's Aave account. Themis checks it against the approved ruleset " +
       "and answers executed (with a tx hash) or rejected (with the list of failed checks). " +
+      "The call waits for an on-chain result, which can take up to a minute. " +
       'Normally action is "repay" and asset is "USDC". Amount is in whole tokens. ' +
       "If Themis rejects, read the failed checks; adjust once if that makes sense, otherwise stop and explain.",
     inputSchema: {
@@ -58,21 +74,28 @@ export const TOOL_DEFS = [
   },
 ];
 
-function money(n) {
-  return String(Number(n.toFixed(2)));
+function trimmed(n) {
+  return n.toFixed(6).replace(/\.?0+$/, "");
 }
 
 export function buildRuleset(args, account) {
-  if (!account) throw new Error("KERNEL_ADDRESS is not configured, so there is no account to protect.");
+  if (!account) throw new Error("No Kernel account is configured (set KERNEL_ACCOUNT_ADDRESS), so there is no account to protect.");
   const total = Number(args.totalCapUsdc);
   if (!Number.isFinite(total) || total <= 0) throw new Error("totalCapUsdc must be a positive number.");
   const maxActions = args.maxActions === undefined ? DEFAULT_ACTIONS : Number(args.maxActions);
-  if (!Number.isInteger(maxActions) || maxActions < 1 || maxActions > 20) {
-    throw new Error("maxActions must be a whole number between 1 and 20.");
+  if (!Number.isInteger(maxActions) || maxActions < 1 || maxActions > MAX_ACTIONS) {
+    throw new Error(`maxActions must be a whole number from 1 to ${MAX_ACTIONS}.`);
+  }
+  const perAction = total / maxActions;
+  if (perAction > MAX_PER_ACTION) {
+    throw new Error(
+      `A cap of ${total} USDC over ${maxActions} actions is ${trimmed(perAction)} USDC each, above the ${MAX_PER_ACTION} USDC per-action limit. ` +
+        `The most Themis allows is ${MAX_PER_ACTION * MAX_ACTIONS} USDC in total.`,
+    );
   }
   const trigger = args.healthFactorBelow === undefined ? DEFAULT_TRIGGER : Number(args.healthFactorBelow);
-  if (!Number.isFinite(trigger) || trigger <= 1 || trigger > 3) {
-    throw new Error("healthFactorBelow must be above 1.0 (the liquidation line) and at most 3.");
+  if (!Number.isFinite(trigger) || trigger <= 1 || trigger > MAX_TRIGGER) {
+    throw new Error(`healthFactorBelow must be above 1.0 (the liquidation line) and at most ${MAX_TRIGGER}.`);
   }
 
   const now = Math.floor(Date.now() / 1000);
@@ -92,37 +115,81 @@ export function buildRuleset(args, account) {
     window: { start, end },
     trigger: { healthFactorBelow: trigger },
     allow: [{ protocol: "aave-v3", action: "repay", asset: "USDC" }],
-    maxPerAction: money(total / maxActions),
+    maxPerAction: trimmed(perAction),
     maxActions,
   };
 }
 
-async function postJson(url, body) {
+const credentialsFile = new URL("../../themis/.local/api-credentials.json", import.meta.url);
+
+function credentials() {
+  try {
+    return existsSync(credentialsFile) ? JSON.parse(readFileSync(credentialsFile, "utf8")) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Bearer token for Themis. Env wins; otherwise the local credentials file Themis generates, so no
+ * secret has to be copied into the Hermes config. Proposals use the agent token unless
+ * THEMIS_RULESET_ROLE=owner (Themis currently only lets the owner token POST /ruleset).
+ */
+function token(kind) {
+  const file = credentials();
+  if (kind === "owner") return process.env.THEMIS_OWNER_TOKEN || file.ownerToken;
+  return process.env.THEMIS_AGENT_TOKEN || file.agentToken;
+}
+
+function authHeaders(kind) {
+  const t = token(kind);
+  return t ? { authorization: `Bearer ${t}` } : {};
+}
+
+async function request(method, url, { body, headers = {} } = {}) {
   const res = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
+    method,
+    headers: { ...(body === undefined ? {} : { "content-type": "application/json" }), ...headers },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(60_000),
   });
   const json = await res.json().catch(() => null);
   if (!json) throw new Error(`Themis returned ${res.status} with a non-JSON body`);
-  return json;
+  return { status: res.status, body: json };
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Themis answers `pending` (202) until the UserOperation lands; wait for the final answer.
+async function awaitFinal(base, first, headers) {
+  let current = first;
+  const deadline = Date.now() + POLL_FOR_MS;
+  while (current.status === "pending" && current.requestId && Date.now() < deadline) {
+    await sleep(POLL_EVERY_MS);
+    current = (await request("GET", `${base}/intent/${encodeURIComponent(current.requestId)}`, { headers })).body;
+  }
+  return current;
 }
 
 /**
  * Run a tool and return its result object. Throws on bad arguments or an unreachable Themis.
  * @param {string} name
  * @param {Record<string, unknown>} args
- * @param {{themisUrl: string, account?: string}} ctx themisUrl is the base, e.g. http://localhost:3000/api
+ * @param {{themisUrl: string, account?: string}} ctx themisUrl is Themis's base, e.g. http://127.0.0.1:3001
  */
 export async function callTool(name, args, ctx) {
   const base = ctx.themisUrl.replace(/\/$/, "");
   if (name === "propose_ruleset") {
     const ruleset = buildRuleset(args, ctx.account);
-    return postJson(`${base}/ruleset`, ruleset);
+    const kind = process.env.THEMIS_RULESET_ROLE === "owner" ? "owner" : "agent";
+    return (await request("POST", `${base}/ruleset`, { body: ruleset, headers: authHeaders(kind) })).body;
   }
   if (name === "send_intent") {
-    return postJson(`${base}/intent`, args);
+    // Themis accepts exactly action, asset, amount and reason; an empty optional field would be a false rejection.
+    const intent = Object.fromEntries(Object.entries(args).filter(([, v]) => v !== undefined && v !== null && v !== ""));
+    const headers = { ...authHeaders("agent"), "idempotency-key": `themis-${randomUUID()}` };
+    const first = (await request("POST", `${base}/intent`, { body: intent, headers })).body;
+    return awaitFinal(base, first, authHeaders("agent"));
   }
   throw new Error(`unknown tool ${name}`);
 }

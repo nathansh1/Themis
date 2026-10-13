@@ -35,7 +35,7 @@ mcp_servers:
     args: [${q(MCP_SERVER)}]
     env:
 ${env.join("\n")}
-    timeout_seconds: 60
+    timeout_seconds: 120
 tools:
   tool_search:
     enabled: "off"
@@ -102,8 +102,8 @@ export function runHermesAgent(prompt, hermes) {
     let err = "";
     const timer = setTimeout(() => {
       child.kill();
-      reject(new Error("Hermes timed out after 120s"));
-    }, 120_000);
+      reject(new Error("Hermes timed out after 180s"));
+    }, 180_000);
     child.stdout.on("data", (d) => (out += d));
     child.stderr.on("data", (d) => (err += d));
     child.on("error", (e) => {
