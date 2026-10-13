@@ -11,9 +11,9 @@ import { entryPoint07Abi, toPackedUserOperation } from 'viem/account-abstraction
 import { createKernelAccount, createKernelAccountClient } from '@zerodev/sdk';
 import { getEntryPoint, KERNEL_V3_3 } from '@zerodev/sdk/constants';
 import { signerToEcdsaValidator } from '@zerodev/ecdsa-validator';
-import { toPermissionValidator, serializePermissionAccount, deserializePermissionAccount } from '@zerodev/permissions';
+import { toPermissionValidator, serializePermissionAccount } from '@zerodev/permissions';
 import { toECDSASigner } from '@zerodev/permissions/signers';
-import { toCallPolicy, toRateLimitPolicy, toTimestampPolicy, CallPolicyVersion, ParamCondition } from '@zerodev/permissions/policies';
+import { buildPolicies, restoreSession, repayCall as buildRepayCall } from './lib/session.mjs';
 
 const envPath = fileURLToPath(new URL('../../.env', import.meta.url));
 loadEnvFile(envPath);
@@ -65,9 +65,9 @@ async function remainingOperations() {
   if (config[0] !== 0) throw new Error('Installed rate-limit interval differs from the authorized policy.');
   return config[1];
 }
-const repayCall = (amount = cap, asset = usdc, beneficiary = kernelAddress, rate = 2n) => ({
-  to: pool, value: 0n, data: encodeFunctionData({ abi: poolAbi, functionName: 'repay', args: [asset, amount, rate, beneficiary] }),
-});
+const repayCall = (amount = cap, asset = usdc, beneficiary = kernelAddress, rate = 2n) =>
+  asset === usdc && beneficiary === kernelAddress && rate === 2n ? buildRepayCall(kernelAddress, amount) :
+    { to: pool, value: 0n, data: encodeFunctionData({ abi: poolAbi, functionName: 'repay', args: [asset, amount, rate, beneficiary] }) };
 
 async function sendOperation(label, account, calls) {
   requireNoPending();
@@ -124,19 +124,7 @@ async function setup() {
   if (now >= state.validUntil) throw new Error('Saved session expired; do not silently renew it.');
   if (state.permissionSaved) { console.log('Permission already authorized; existing allowance is not reset.'); return; }
   const signer = await toECDSASigner({ signer: signerAccount });
-  const policies = [
-    toCallPolicy({ policyVersion: CallPolicyVersion.V0_0_4, permissions: [{
-      target: pool, valueLimit: 0n, abi: poolAbi, functionName: 'repay', args: [
-        { condition: ParamCondition.EQUAL, value: usdc },
-        { condition: ParamCondition.LESS_THAN_OR_EQUAL, value: cap },
-        { condition: ParamCondition.EQUAL, value: 2n },
-        { condition: ParamCondition.EQUAL, value: kernelAddress },
-      ],
-    }] }),
-    toTimestampPolicy({ validAfter: state.validAfter, validUntil: state.validUntil }),
-    // interval=0 permits immediate calls; the default policy never resets count.
-    toRateLimitPolicy({ count: 3, interval: 0 }),
-  ];
+  const policies = buildPolicies({ account: kernelAddress, maxPerAction: '1', maxActions: 3, window: { start: state.validAfter, end: state.validUntil } });
   for (const policy of policies) {
     const address = `0x${policy.getPolicyInfoInBytes().slice(-40)}`;
     if (!await client.getCode({ address })) throw new Error(`Policy contract missing: ${address}`);
@@ -162,7 +150,7 @@ async function sessionAccount() {
   if (signer.account.address !== state.sessionAddress) throw new Error('Session key differs from saved authorization.');
   // Deliberately no owner validator: the saved authorization and session key suffice.
   const { serialized } = JSON.parse(readFileSync(permissionPath, 'utf8'));
-  const account = await deserializePermissionAccount(client, entryPoint, KERNEL_V3_3, serialized, signer);
+  const account = await restoreSession(client, serialized, key('SESSION_PRIVATE_KEY'));
   if (account.address.toLowerCase() !== kernelAddress.toLowerCase()) throw new Error('Serialized account differs from A1.');
   return account;
 }
