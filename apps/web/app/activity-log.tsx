@@ -63,20 +63,26 @@ export default function ActivityLog() {
           ?.slice()
           .reverse()
           .map((e) => {
-            const approved = e.result.status === "executed";
+            const { result } = e;
+            const approved = result.status === "executed";
+            const pending = result.status === "pending";
             return (
               <li key={e.id} className="grid grid-cols-[auto_1fr_auto] items-start gap-4 border-t hairline py-4">
                 <span
                   className={`stamp mt-0.5 inline-block w-28 border-2 px-2 py-1 text-center font-display text-xs font-bold uppercase tracking-[0.2em] ${
-                    approved ? "border-ok text-ok" : "border-seal text-seal"
+                    approved ? "border-ok text-ok" : pending ? "border-foreground/40 text-foreground/60" : "border-seal text-seal"
                   }`}
                 >
-                  {approved ? "Approved" : "Rejected"}
+                  {approved ? "Approved" : pending ? "Pending" : "Rejected"}
                 </span>
                 <div className="min-w-0">
                   <p className="font-mono text-sm">{describe(e.intent)}</p>
                   <p className="mt-1 break-all font-mono text-xs text-foreground/55">
-                    {e.result.status === "executed" ? e.result.txHash : e.result.failed.join("; ")}
+                    {result.status === "executed"
+                      ? result.txHash
+                      : result.status === "pending"
+                        ? result.userOpHash
+                        : result.failed.join("; ")}
                   </p>
                 </div>
                 <time className="font-mono text-xs tabular-nums text-foreground/40">

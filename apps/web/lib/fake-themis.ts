@@ -35,7 +35,10 @@ export function decide(intent: unknown): IntentResult {
   const executed = log.filter((e) => e.result.status === "executed").length;
   if (executed >= MAX_ACTIONS) failed.push(`over running total of ${MAX_ACTIONS} actions`);
 
-  return failed.length ? { status: "rejected", failed } : { status: "executed", txHash: fakeTxHash() };
+  const requestId = crypto.randomUUID();
+  return failed.length
+    ? { status: "rejected", requestId, failed }
+    : { status: "executed", requestId, txHash: fakeTxHash() };
 }
 
 export function record(intent: unknown, result: IntentResult): LogEntry {
