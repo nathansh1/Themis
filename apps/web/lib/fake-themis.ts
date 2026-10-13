@@ -59,7 +59,7 @@ export function record(intent: unknown, result: IntentResult): ActivityEntry {
 }
 
 export function getRulesets(): RulesetResult[] {
-  return store.rulesets;
+  return store.rulesets.slice().reverse(); // newest first, like GET /rulesets
 }
 
 // The real Themis holds the proposal as awaiting_owner until the owner approves it.

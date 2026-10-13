@@ -132,17 +132,16 @@ function credentials() {
 
 /**
  * Bearer token for Themis. Env wins; otherwise the local credentials file Themis generates, so no
- * secret has to be copied into the Hermes config. Proposals use the agent token unless
- * THEMIS_RULESET_ROLE=owner (Themis currently only lets the owner token POST /ruleset).
+ * secret has to be copied into the Hermes config. The agent uses only the agent token: it may propose
+ * rulesets (pending until the owner authorizes) and send intents, nothing more.
  */
-function token(kind) {
+function token() {
   const file = credentials();
-  if (kind === "owner") return process.env.THEMIS_OWNER_TOKEN || file.ownerToken;
   return process.env.THEMIS_AGENT_TOKEN || file.agentToken;
 }
 
-function authHeaders(kind) {
-  const t = token(kind);
+function authHeaders() {
+  const t = token();
   return t ? { authorization: `Bearer ${t}` } : {};
 }
 
@@ -181,15 +180,14 @@ export async function callTool(name, args, ctx) {
   const base = ctx.themisUrl.replace(/\/$/, "");
   if (name === "propose_ruleset") {
     const ruleset = buildRuleset(args, ctx.account);
-    const kind = process.env.THEMIS_RULESET_ROLE === "owner" ? "owner" : "agent";
-    return (await request("POST", `${base}/ruleset`, { body: ruleset, headers: authHeaders(kind) })).body;
+    return (await request("POST", `${base}/ruleset`, { body: ruleset, headers: authHeaders() })).body;
   }
   if (name === "send_intent") {
     // Themis accepts exactly action, asset, amount and reason; an empty optional field would be a false rejection.
     const intent = Object.fromEntries(Object.entries(args).filter(([, v]) => v !== undefined && v !== null && v !== ""));
-    const headers = { ...authHeaders("agent"), "idempotency-key": `themis-${randomUUID()}` };
+    const headers = { ...authHeaders(), "idempotency-key": `themis-${randomUUID()}` };
     const first = (await request("POST", `${base}/intent`, { body: intent, headers })).body;
-    return awaitFinal(base, first, authHeaders("agent"));
+    return awaitFinal(base, first, authHeaders());
   }
   throw new Error(`unknown tool ${name}`);
 }

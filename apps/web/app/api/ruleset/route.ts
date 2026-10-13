@@ -2,16 +2,13 @@ import { connection } from "next/server";
 import { getRulesets, propose } from "@/lib/fake-themis";
 import { themisBase, themisFetch } from "@/lib/themis";
 
-// Real Themis only exposes the active ruleset (GET /ruleset); proposals go from Hermes straight to Themis.
+// Newest first, pending proposals included (GET /rulesets). Proposals go from Hermes straight to Themis.
 export async function GET() {
   await connection();
   const base = themisBase();
   if (!base) return Response.json(getRulesets());
 
-  const res = await themisFetch(base, "/ruleset");
-  if (!res.ok) return res;
-  const active = await res.json();
-  return Response.json(active ? [active] : []);
+  return themisFetch(base, "/rulesets");
 }
 
 export async function POST(request: Request) {

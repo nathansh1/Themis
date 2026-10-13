@@ -27,7 +27,7 @@ export function httpServer(service, cfg) {
       const isAgent = equals(authorization, `Bearer ${cfg.agentToken}`);
       if (!isOwner && !isAgent) return reply(401, { error: 'unauthorized' });
       if (req.method === 'POST' && url.pathname === '/ruleset') {
-        if (!isOwner) return reply(403, { error: 'owner_required' });
+        // Proposals are inert: either token may propose, and only an owner authorization activates one.
         const response = service.ruleset(await jsonBody(req));
         return reply(response.code, response.body);
       }
@@ -35,6 +35,7 @@ export function httpServer(service, cfg) {
         const response = await service.intent(req.headers['idempotency-key'], await jsonBody(req));
         return reply(response.code, response.body);
       }
+      if (req.method === 'GET' && url.pathname === '/rulesets') return reply(200, service.rulesets());
       if (req.method === 'GET' && url.pathname === '/ruleset') return reply(200, publicGrant(service.store.active()));
       if (req.method === 'GET' && url.pathname === '/log') {
         const limit = Number(url.searchParams.get('limit') || 100);

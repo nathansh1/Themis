@@ -150,11 +150,21 @@ test('HTTP separates owner and agent, rejects bad origins and logs decisions', a
   const url = `http://127.0.0.1:${server.address().port}`;
   const headers = { authorization: `Bearer ${cfg.agentToken}`, 'content-type': 'application/json' };
   assert.equal((await fetch(`${url}/log`)).status, 401);
-  assert.equal((await fetch(`${url}/ruleset`, { method: 'POST', headers, body: JSON.stringify(rules) })).status, 403);
+  assert.equal((await fetch(`${url}/ruleset`, { method: 'POST', body: JSON.stringify(rules) })).status, 401);
   assert.equal((await fetch(`${url}/log`, { headers: { ...headers, origin: 'https://attacker.example' } })).status, 403);
   const response = await fetch(`${url}/intent`, { method: 'POST', headers: { ...headers, 'idempotency-key': 'http-request' }, body: JSON.stringify({ ...intent, action: 'transfer' }) });
   assert.ok((await response.json()).failed.includes('action_not_allowed'));
   const log = await (await fetch(`${url}/log`, { headers })).json(); assert.equal(log.entries.length, 1);
   const proposal = await fetch(`${url}/ruleset`, { method: 'POST', headers: { ...headers, authorization: `Bearer ${cfg.ownerToken}` }, body: JSON.stringify(rules) });
   assert.equal(proposal.status, 202); assert.equal((await proposal.json()).serialized, undefined);
+  // The agent token may propose, but a proposal stays pending: nothing becomes active without owner authorization.
+  const proposed = await fetch(`${url}/ruleset`, { method: 'POST', headers, body: JSON.stringify({ ...rules, window: { start: Math.floor(Date.now() / 1000), end: Math.floor(Date.now() / 1000) + 3600 }, maxActions: rules.maxActions - 1 }) });
+  const body = await proposed.json();
+  assert.equal(proposed.status, 202); assert.equal(body.status, 'awaiting_owner'); assert.equal(body.serialized, undefined);
+  assert.equal((await (await fetch(`${url}/ruleset`, { headers })).json()).id, 'grant'); // the fixture's active grant is untouched
+  const listed = await (await fetch(`${url}/rulesets`, { headers })).json();
+  assert.equal(listed.filter(item => item.status === 'active').length, 1);
+  assert.ok(listed.some(item => item.id === body.id && item.status === 'awaiting_owner'));
+  assert.ok(listed.some(item => item.status === 'expired')); // the earlier proposal's window (ending at t=1000) is over
+  assert.ok(listed.every(item => item.serialized === undefined));
 });

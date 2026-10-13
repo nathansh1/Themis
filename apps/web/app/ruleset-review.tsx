@@ -17,7 +17,8 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 export default function RulesetReview() {
   const { data, error } = usePoll<RulesetResult[]>("/api/ruleset", 3000);
-  const latest = data?.find((g) => g.status === "active") ?? data?.at(-1);
+  // Newest first. A live proposal awaiting the Ledger is what the owner must review; otherwise show what is in force.
+  const latest = data?.find((g) => g.status === "awaiting_owner") ?? data?.find((g) => g.status === "active") ?? data?.[0];
   const r = latest?.rules;
 
   if (error) return <p className="text-sm text-seal">{error}</p>;

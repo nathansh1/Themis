@@ -23,10 +23,18 @@ export class Service {
     let grant = this.store.grant(id);
     if (!grant) {
       const policies = buildPolicies(rules);
-      grant = { id, status: 'awaiting_owner', rules, policyPreview: policies.map(policy => ({ type: policy.policyParams.type, address: `0x${policy.getPolicyInfoInBytes().slice(-40)}` })) };
+      grant = { id, status: 'awaiting_owner', createdAt: new Date().toISOString(), rules, policyPreview: policies.map(policy => ({ type: policy.policyParams.type, address: `0x${policy.getPolicyInfoInBytes().slice(-40)}` })) };
       this.store.putGrant(grant);
     }
     return { code: grant.status === 'active' ? 200 : 202, body: publicGrant(grant) };
+  }
+  // Newest first, including pending proposals; a proposal whose window has ended reads as expired.
+  rulesets(limit = 10) {
+    const now = Math.floor(Date.now() / 1000);
+    return this.store.grants()
+      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+      .slice(0, limit)
+      .map(grant => publicGrant(grant.status === 'awaiting_owner' && grant.rules.window.end <= now ? { ...grant, status: 'expired' } : grant));
   }
   async reconcile() {
     for (const row of this.store.pending()) {
