@@ -12,10 +12,10 @@ export default function Home() {
       <header className="flex flex-col gap-4">
         <h1>
           <Image
-            src="/themis-logo.jpg"
+            src="/themis-logo.webp"
             alt="Themis"
-            width={1280}
-            height={428}
+            width={2000}
+            height={667}
             priority
             className="logo -ml-3 h-auto w-full max-w-md"
           />
