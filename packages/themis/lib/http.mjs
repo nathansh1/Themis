@@ -31,6 +31,13 @@ export function httpServer(service, cfg) {
         const response = service.ruleset(await jsonBody(req));
         return reply(response.code, response.body);
       }
+      const owned = url.pathname.match(/^\/ruleset\/([0-9a-f]{64})\/(prepare|authorize)$/);
+      if (req.method === 'POST' && owned) {
+        if (!isOwner) return reply(403, { error: 'owner_required' });
+        const body = owned[2] === 'authorize' ? await jsonBody(req) : null;
+        const response = owned[2] === 'prepare' ? await service.prepareOwner(owned[1]) : await service.authorize(owned[1], body?.signatures);
+        return reply(response.code, response.body);
+      }
       if (req.method === 'POST' && url.pathname === '/intent') {
         const response = await service.intent(req.headers['idempotency-key'], await jsonBody(req));
         return reply(response.code, response.body);

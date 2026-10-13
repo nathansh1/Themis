@@ -8,16 +8,22 @@ import { Service } from '../lib/service.mjs';
 import { httpServer } from '../lib/http.mjs';
 import { units, buildPolicies, repayCall, poolAbi, usdc, pool } from '../lib/session.mjs';
 import { decodeFunctionData } from 'viem';
+import { MissingSignature } from '../lib/owner.mjs';
 
 const account = '0x36DeFE9447BfF3855338FbBE5E376F6460f0E23b';
 const rules = { account, chainId: 11155111, window: { start: 100, end: 1000 }, trigger: { healthFactorBelow: 1.15 }, allow: [{ protocol: 'aave-v3', action: 'repay', asset: 'USDC' }], maxPerAction: '1', maxActions: 3 };
 const intent = { action: 'repay', asset: 'USDC', amount: '1', reason: 'test' };
 const hash = `0x${'ab'.repeat(32)}`;
+const digestA = `0x${'1'.repeat(64)}`, digestB = `0x${'2'.repeat(64)}`, sig = `0x${'a'.repeat(130)}`;
+const next = { ...rules, window: { start: 1500, end: 5000 } };
 function fixture(t, options = {}) {
   const store = new Store(options.path || ':memory:');
   if (!store.active()) store.activate({ id: 'grant', status: 'active', rules, initialSpent: '0' });
   const backend = {
     sends: 0, prepares: 0, found: true,
+    now: async () => 2000,
+    prepareAuthorization: async () => ({ operation: { sender: account, nonce: 5n, callData: '0x' }, hash, requests: [{ id: digestA, kind: 'typedData', typedData: {} }, { id: digestB, kind: 'message', raw: hash }], amount: 3000000n, sessionKey: account }),
+    finalizeAuthorization: async () => ({ operation: { sender: account }, hash, serialized: 'serialized-permission', permissionId: `0x${'12'.repeat(4)}`, ratePolicy: account }),
     snapshot: async () => ({ now: 200, allowance: 3000000n, remaining: 3, balance: 100000000n, debt: 500000000n }),
     prepare: async () => { backend.prepares++; return { hash }; },
     broadcast: async () => { backend.sends++; },
@@ -167,4 +173,73 @@ test('HTTP separates owner and agent, rejects bad origins and logs decisions', a
   assert.ok(listed.some(item => item.id === body.id && item.status === 'awaiting_owner'));
   assert.ok(listed.some(item => item.status === 'expired')); // the earlier proposal's window (ending at t=1000) is over
   assert.ok(listed.every(item => item.serialized === undefined));
+});
+
+test('owner authorization: prepare, then signatures activate the ruleset only after the approval lands', async t => {
+  const { service, store, backend } = fixture(t);
+  const grant = service.ruleset(next).body;
+  const prepared = await service.prepareOwner(grant.id);
+  assert.equal(prepared.code, 200);
+  assert.deepEqual(prepared.body.requests.map(request => request.id), [digestA, digestB]);
+  assert.equal(prepared.body.allowanceUnits, '3000000');
+  assert.equal(store.grant(grant.id).status, 'awaiting_owner');
+  assert.equal((await service.authorize(grant.id, { [digestA]: sig })).body.failed[0], 'missing_signature');
+  assert.equal((await service.authorize(grant.id, { [digestA]: sig, nope: sig })).body.failed[0], 'invalid_signatures');
+  let hashAtBroadcast;
+  backend.broadcast = async () => { backend.sends++; hashAtBroadcast = store.request(`owner-${grant.id}`).userOpHash; };
+  backend.found = false;
+  const sent = await service.authorize(grant.id, { [digestA]: sig, [digestB]: sig });
+  assert.equal(sent.code, 202); assert.equal(sent.body.status, 'authorizing');
+  assert.equal(hashAtBroadcast, hash); // durable before the network saw it
+  assert.equal(store.grant(grant.id).status, 'awaiting_owner'); assert.equal(store.active().id, 'grant');
+  assert.equal(store.grant(grant.id).serialized, 'serialized-permission');
+  // While the approval is in flight, nothing can spend and nothing is resent.
+  assert.deepEqual((await service.intent('during-approval', intent)).body.failed, ['account_busy']);
+  assert.equal((await service.authorize(grant.id, { [digestA]: sig, [digestB]: sig })).body.failed[0], 'not_prepared'); // the signed operation is single-use
+  assert.equal((await service.prepareOwner(grant.id)).body.failed[0], 'account_busy');
+  assert.equal(backend.sends, 1);
+  backend.found = true;
+  await service.reconcile();
+  assert.equal(store.active().id, grant.id);
+  assert.equal(store.grant('grant').status, 'expired');
+  assert.equal(store.request(`owner-${grant.id}`).status, 'executed');
+  assert.equal(store.grant(grant.id).authorization, undefined);
+});
+test('owner authorization is refused for a live session, an expired window, or a changed signing request', async t => {
+  const { service, store, backend } = fixture(t);
+  backend.now = async () => 500; // the fixture's active session (window 100-1000) is still running
+  const grant = service.ruleset(next).body;
+  assert.equal((await service.prepareOwner(grant.id)).body.failed[0], 'existing_session_active');
+  backend.now = async () => 6000;
+  assert.equal((await service.prepareOwner(grant.id)).body.failed[0], 'window_closed');
+  backend.now = async () => 2000;
+  assert.equal((await service.authorize(grant.id, { [digestA]: sig })).body.failed[0], 'not_prepared');
+  assert.equal((await service.prepareOwner('f'.repeat(64))).code, 404);
+  await service.prepareOwner(grant.id);
+  backend.finalizeAuthorization = async () => { throw new MissingSignature('x'); };
+  assert.equal((await service.authorize(grant.id, { [digestA]: sig, [digestB]: sig })).body.failed[0], 'authorization_changed');
+  assert.equal(backend.sends, 0); assert.equal(store.request(`owner-${grant.id}`), null);
+});
+test('a reverted owner approval never activates the ruleset', async t => {
+  const { service, store, backend } = fixture(t);
+  const grant = service.ruleset(next).body;
+  await service.prepareOwner(grant.id);
+  backend.receipt = async () => ({ success: false, receipt: { transactionHash: hash } });
+  const sent = await service.authorize(grant.id, { [digestA]: sig, [digestB]: sig });
+  assert.equal(sent.body.status, 'rejected'); assert.deepEqual(sent.body.failed, ['owner_approval_reverted']);
+  assert.equal(store.active().id, 'grant'); assert.equal(store.pending().length, 0);
+});
+test('owner routes require the owner token', async t => {
+  const { service } = fixture(t);
+  const cfg = { agentToken: 'a'.repeat(64), ownerToken: 'b'.repeat(64), origins: new Set() };
+  const server = httpServer(service, cfg);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const post = (token, path, body) => fetch(`${url}${path}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body || {}) });
+  const grant = service.ruleset(next).body;
+  assert.equal((await post(cfg.agentToken, `/ruleset/${grant.id}/prepare`)).status, 403);
+  assert.equal((await post(cfg.agentToken, `/ruleset/${grant.id}/authorize`, { signatures: {} })).status, 403);
+  const prepared = await post(cfg.ownerToken, `/ruleset/${grant.id}/prepare`);
+  assert.equal(prepared.status, 200); assert.equal((await prepared.json()).requests.length, 2);
 });

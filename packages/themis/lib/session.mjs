@@ -2,9 +2,11 @@ import { createPublicClient, http, parseAbi, encodeFunctionData, pad } from 'vie
 import { privateKeyToAccount } from 'viem/accounts';
 import { createBundlerClient, getUserOperationHash } from 'viem/account-abstraction';
 import { sepolia } from 'viem/chains';
-import { createKernelAccountClient } from '@zerodev/sdk';
+import { createKernelAccount, createKernelAccountClient } from '@zerodev/sdk';
+import { signerToEcdsaValidator } from '@zerodev/ecdsa-validator';
+import { remoteOwner } from './owner.mjs';
 import { getEntryPoint, KERNEL_V3_3 } from '@zerodev/sdk/constants';
-import { deserializePermissionAccount } from '@zerodev/permissions';
+import { deserializePermissionAccount, toPermissionValidator, serializePermissionAccount } from '@zerodev/permissions';
 import { toECDSASigner } from '@zerodev/permissions/signers';
 import { toCallPolicy, toTimestampPolicy, toRateLimitPolicy, CallPolicyVersion, ParamCondition } from '@zerodev/permissions/policies';
 
@@ -51,12 +53,50 @@ export async function restoreSession(client, serialized, sessionKey) {
   const signer = await toECDSASigner({ signer: privateKeyToAccount(normalizeKey(sessionKey)) });
   return deserializePermissionAccount(client, entryPoint, kernelVersion, serialized, signer);
 }
+// The owner path (Ledger) and the permission path (session key) over the same Kernel, built exactly the
+// same way in prepare and finalize so the typed data and operation hash are identical in both.
+async function authorizationParts(client, config, grant, signatures) {
+  if (!config.ownerAddress) throw new Error('Owner address is not configured.');
+  const owner = remoteOwner(config.ownerAddress, signatures);
+  const validator = await signerToEcdsaValidator(client, { signer: owner.account, entryPoint, kernelVersion, validatorAddress: config.ownerValidator });
+  const base = { entryPoint, kernelVersion, address: grant.rules.account, index: 0n };
+  const ownerAccount = await createKernelAccount(client, { ...base, plugins: { sudo: validator } });
+  if (ownerAccount.address.toLowerCase() !== grant.rules.account.toLowerCase()) throw new Error('Owner does not control the configured Kernel.');
+  const signer = await toECDSASigner({ signer: privateKeyToAccount(normalizeKey(config.sessionKey)) });
+  const policies = buildPolicies(grant.rules);
+  const permission = await toPermissionValidator(client, { signer, policies, entryPoint, kernelVersion });
+  const account = await createKernelAccount(client, { ...base, plugins: { sudo: validator, regular: permission } });
+  return { owner, ownerAccount, account, permission, policies, signerAddress: signer.account.address };
+}
 export function createChainBackend(config) {
   const client = createPublicClient({ chain, transport: http(config.rpc, { retryCount: 0, timeout: 15000 }) });
   const relay = createBundlerClient({ chain, transport: http(config.bundler, { retryCount: 0, timeout: 15000 }) });
   return {
     client,
     async assertChain() { if (await client.getChainId() !== chain.id) throw new Error('Expected Ethereum Sepolia.'); },
+    async now() { return Number((await client.getBlock()).timestamp); },
+    // Phase 1: assemble the session permission and the owner's allowance approval; report what the owner must sign.
+    async prepareAuthorization(grant) {
+      const { owner, ownerAccount, account, permission, policies, signerAddress } = await authorizationParts(client, config, grant);
+      await serializePermissionAccount(account); // asks the owner to sign the permission's enable data
+      const ownerClient = createKernelAccountClient({ account: ownerAccount, client, chain, bundlerTransport: http(config.bundler, { retryCount: 0, timeout: 30000 }) });
+      const amount = units(grant.rules.maxPerAction) * BigInt(grant.rules.maxActions);
+      const prepared = await ownerClient.prepareUserOperation({ calls: [{ to: usdc, value: 0n, data: encodeFunctionData({ abi: tokenAbi, functionName: 'approve', args: [pool, amount] }) }] });
+      const { signature: _stub, calls: _calls, account: _account, ...operation } = prepared;
+      await ownerAccount.signUserOperation(operation); // asks the owner to sign the operation hash
+      const hash = getUserOperationHash({ userOperation: operation, chainId: chain.id, entryPointAddress: entryPoint.address, entryPointVersion: '0.7' });
+      return { operation, hash, requests: owner.requests(), amount, sessionKey: signerAddress, permissionId: permission.getIdentifier(), ratePolicy: `0x${policies[2].getPolicyInfoInBytes().slice(-40)}` };
+    },
+    // Phase 2: rebuild the identical objects, apply the owner's signatures, and return the sendable operation.
+    async finalizeAuthorization(grant, prepared, signatures) {
+      const { ownerAccount, account, permission, policies } = await authorizationParts(client, config, grant, signatures);
+      const serialized = await serializePermissionAccount(account);
+      const operation = { ...prepared.operation };
+      operation.signature = await ownerAccount.signUserOperation(operation);
+      const hash = getUserOperationHash({ userOperation: operation, chainId: chain.id, entryPointAddress: entryPoint.address, entryPointVersion: '0.7' });
+      if (hash !== prepared.hash) throw new Error('Prepared operation changed.');
+      return { operation, hash, serialized, permissionId: permission.getIdentifier(), ratePolicy: `0x${policies[2].getPolicyInfoInBytes().slice(-40)}` };
+    },
     async snapshot(grant) {
       const id = pad(grant.permissionId, { size: 32, dir: 'right' });
       const rateAbi = parseAbi(['function status(bytes32,address) view returns (uint8)', 'function rateLimitConfigs(bytes32,address) view returns (uint48,uint48,uint48)']);

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { buildPolicies, units } from './session.mjs';
 import { validateIntent, validateRuleset, checkLimits } from './validation.mjs';
+import { MissingSignature, isDigest, isSignature, encodeOperation, decodeOperation } from './owner.mjs';
 const canonical = value => value && typeof value === 'object' ? Array.isArray(value) ? value.map(canonical) : Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 export const fingerprint = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 export function publicGrant(grant) {
@@ -38,10 +39,17 @@ export class Service {
   }
   async reconcile() {
     for (const row of this.store.pending()) {
-      if (row.status !== 'pending' || !row.userOpHash) continue;
+      if (!['pending', 'authorizing'].includes(row.status) || !row.userOpHash) continue;
       let receipt;
       try { receipt = await this.backend.receipt(row.userOpHash); } catch { continue; }
       if (!receipt) continue;
+      if (row.status === 'authorizing') {
+        // The owner's approval landed: only now does the ruleset become the active one.
+        row.txHash = receipt.receipt.transactionHash; row.updatedAt = new Date().toISOString();
+        if (receipt.success) { this.store.activate(this.store.grant(row.grantId)); row.status = 'executed'; row.failed = []; }
+        else { row.status = 'rejected'; row.failed = ['owner_approval_reverted']; }
+        this.store.update(row); continue;
+      }
       row.status = receipt.success ? 'executed' : 'rejected';
       row.txHash = receipt.receipt.transactionHash;
       row.failed = receipt.success ? [] : ['execution_reverted'];
@@ -51,7 +59,49 @@ export class Service {
   // Run only after taking the process lock. A checking row has no signed/hash
   // persisted and cannot have been broadcast; pending rows must be reconciled.
   recoverPreparation() {
-    for (const row of this.store.pending()) if (row.status === 'checking') { row.status = 'rejected'; row.failed = ['interrupted_before_submission']; this.store.update(row); }
+    for (const row of this.store.pending()) if (row.status === 'checking' || (row.status === 'authorizing' && !row.userOpHash)) { row.status = 'rejected'; row.failed = ['interrupted_before_submission']; this.store.update(row); }
+  }
+  // Owner authorization, in two phases. The owner's key (a Ledger in the browser) never reaches this server:
+  // prepare reports exactly what must be signed; authorize applies the signatures to those same objects.
+  prepareOwner(id) { return this.serial(() => this.processOwner(id, null)); }
+  authorize(id, signatures) { return this.serial(() => this.processOwner(id, signatures)); }
+  async processOwner(id, signatures) {
+    const refuse = (code, ...failed) => ({ code, body: { status: 'rejected', failed } });
+    const grant = typeof id === 'string' ? this.store.grant(id) : null;
+    if (!grant) return refuse(404, 'unknown_ruleset');
+    if (grant.status !== 'awaiting_owner') return refuse(409, 'ruleset_not_pending');
+    if (validateRuleset(grant.rules, this.account).length) return refuse(400, 'invalid_ruleset');
+    if (signatures) {
+      const entries = signatures && typeof signatures === 'object' && !Array.isArray(signatures) ? Object.entries(signatures) : [];
+      if (!grant.authorization) return refuse(409, 'not_prepared');
+      if (entries.some(([digest, signature]) => !isDigest(digest) || !isSignature(signature)) || entries.length > 4) return refuse(400, 'invalid_signatures');
+    }
+    await this.reconcile();
+    if (this.store.pending().length) return refuse(409, 'account_busy');
+    let now;
+    try { now = await this.backend.now(); } catch { return refuse(503, 'chain_unavailable'); }
+    if (now >= grant.rules.window.end) return refuse(409, 'window_closed');
+    // The previous session's allowance is shared with the new one, so it must be over first.
+    const old = this.store.active();
+    if (old && old.id !== grant.id && now <= old.rules.window.end) return refuse(409, 'existing_session_active');
+    if (!signatures) {
+      let prepared;
+      try { prepared = await this.backend.prepareAuthorization(grant); } catch { return refuse(503, 'authorization_unavailable'); }
+      this.store.putGrant({ ...grant, authorization: { hash: prepared.hash, operation: encodeOperation(prepared.operation), requestIds: prepared.requests.map(request => request.id), preparedAt: new Date().toISOString() } });
+      return { code: 200, body: { id: grant.id, status: 'awaiting_signatures', hash: prepared.hash, allowanceUnits: prepared.amount.toString(), sessionKey: prepared.sessionKey, account: grant.rules.account, requests: prepared.requests } };
+    }
+    if (grant.authorization.requestIds.some(digest => !signatures[digest])) return refuse(400, 'missing_signature');
+    let finalized;
+    try { finalized = await this.backend.finalizeAuthorization(grant, { operation: decodeOperation(grant.authorization.operation), hash: grant.authorization.hash }, signatures); }
+    catch (error) { return refuse(error instanceof MissingSignature ? 409 : 503, error instanceof MissingSignature ? 'authorization_changed' : 'authorization_unavailable'); }
+    const job = { id: `owner-${grant.id}`, grantId: grant.id, fingerprint: grant.id, status: 'authorizing', internal: true, userOpHash: finalized.hash, createdAt: new Date().toISOString(), failed: [] };
+    // Persist the hash and the session material BEFORE the network sees the operation; the in-flight row blocks all spending meanwhile.
+    try { if (this.store.request(job.id)) this.store.update(job); else this.store.insert(job); } catch { return refuse(409, 'account_busy'); }
+    this.store.putGrant({ ...grant, authorization: undefined, serialized: finalized.serialized, permissionId: finalized.permissionId, ratePolicy: finalized.ratePolicy, initialSpent: '0' });
+    try { await this.backend.broadcast(finalized); } catch { /* Unknown outcome: stay authorizing and reconcile. Never resend. */ }
+    await this.reconcile();
+    const current = this.store.request(job.id);
+    return { code: current.status === 'authorizing' ? 202 : 200, body: { id: grant.id, status: current.status === 'executed' ? 'active' : current.status === 'authorizing' ? 'authorizing' : 'rejected', userOpHash: current.userOpHash, txHash: current.txHash, failed: current.failed } };
   }
   intent(id, payload) { return this.serial(() => this.processIntent(id, payload)); }
   async processIntent(id, payload) {
