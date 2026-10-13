@@ -81,9 +81,9 @@ export class Service {
     let now;
     try { now = await this.backend.now(); } catch { return refuse(503, 'chain_unavailable'); }
     if (now >= grant.rules.window.end) return refuse(409, 'window_closed');
-    // The previous session's allowance is shared with the new one, so it must be over first.
-    const old = this.store.active();
-    if (old && old.id !== grant.id && now <= old.rules.window.end) return refuse(409, 'existing_session_active');
+    // A new approval may replace a live session: the owner's approve() resets the pool allowance to exactly the
+    // new mandate's total, and that allowance is the on-chain cap shared by every permission on this account,
+    // so the old session can never add to what the new mandate allows. Themis only signs for the active grant.
     if (!signatures) {
       let prepared;
       try { prepared = await this.backend.prepareAuthorization(grant); } catch { return refuse(503, 'authorization_unavailable'); }

@@ -205,11 +205,15 @@ test('owner authorization: prepare, then signatures activate the ruleset only af
   assert.equal(store.request(`owner-${grant.id}`).status, 'executed');
   assert.equal(store.grant(grant.id).authorization, undefined);
 });
-test('owner authorization is refused for a live session, an expired window, or a changed signing request', async t => {
+test('a new approval replaces a live session; refused for an expired window or a changed signing request', async t => {
   const { service, store, backend } = fixture(t);
   backend.now = async () => 500; // the fixture's active session (window 100-1000) is still running
+  const replacement = service.ruleset({ ...rules, window: { start: 400, end: 5000 } }).body;
+  assert.equal((await service.prepareOwner(replacement.id)).code, 200);
+  await service.authorize(replacement.id, { [digestA]: sig, [digestB]: sig });
+  assert.equal(store.active().id, replacement.id); assert.equal(store.grant('grant').status, 'expired');
+  backend.sends = 0;
   const grant = service.ruleset(next).body;
-  assert.equal((await service.prepareOwner(grant.id)).body.failed[0], 'existing_session_active');
   backend.now = async () => 6000;
   assert.equal((await service.prepareOwner(grant.id)).body.failed[0], 'window_closed');
   backend.now = async () => 2000;
